@@ -434,6 +434,10 @@ pub struct Config {
     pub buffer_picker: BufferPickerConfig,
     /// Whether to implicitly trust every workspace or not
     pub insecure: bool,
+    /// The mode the editor starts in, and returns to when opening a file or
+    /// switching windows. Defaults to `normal`. Set to `insert` for a
+    /// non-modal, Emacs-like editing experience.
+    pub default_mode: Mode,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone, Copy)]
@@ -1157,6 +1161,7 @@ impl Default for Config {
             kitty_keyboard_protocol: Default::default(),
             buffer_picker: BufferPickerConfig::default(),
             insecure: false,
+            default_mode: Mode::Normal,
         }
     }
 }
@@ -1341,7 +1346,7 @@ impl Editor {
         area.height -= 1;
 
         Self {
-            mode: Mode::Normal,
+            mode: conf.default_mode,
             tree: Tree::new(area),
             next_document_id: DocumentId::default(),
             documents: BTreeMap::new(),
@@ -1860,7 +1865,7 @@ impl Editor {
         }
 
         if !matches!(action, Action::Load) {
-            self.enter_normal_mode();
+            self.enter_default_mode();
         }
 
         let focust_lost = match action {
@@ -2192,8 +2197,8 @@ impl Editor {
             return;
         }
 
-        // Reset mode to normal and ensure any pending changes are committed in the old document.
-        self.enter_normal_mode();
+        // Reset mode to the configured default and ensure any pending changes are committed in the old document.
+        self.enter_default_mode();
         let (view, doc) = current!(self);
         doc.append_changes_to_history(view);
         self.ensure_cursor_in_view(view_id);
@@ -2433,6 +2438,29 @@ impl Editor {
         }
 
         Ok(())
+    }
+
+    /// Enter the configured default mode (see `editor.default-mode`).
+    ///
+    /// Used for implicit mode transitions such as opening a file or switching
+    /// windows. With the default config this is identical to
+    /// `enter_normal_mode`, but when `default-mode` is `insert` it keeps the
+    /// user in insert mode instead of yanking them back to normal mode. The
+    /// same insert/append cleanup as `enter_normal_mode` is performed whenever a
+    /// current view exists.
+    pub fn enter_default_mode(&mut self) {
+        let default_mode = self.config().default_mode;
+        // During startup `switch`/`focus` can run before any view exists.
+        // `enter_normal_mode` dereferences the current view and would panic, so
+        // in that case just set the mode directly without the insert cleanup.
+        if self.tree.try_get(self.tree.focus).is_none() {
+            self.mode = default_mode;
+            return;
+        }
+        self.enter_normal_mode();
+        if default_mode != Mode::Normal {
+            self.mode = default_mode;
+        }
     }
 
     /// Switches the editor into normal mode.
